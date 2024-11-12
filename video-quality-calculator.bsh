@@ -37,6 +37,12 @@ function isnum {
   return 1
 }
 #[cf]
+#[of]:function exit {
+function exit {
+  mouseDisable
+  command exit
+}
+#[cf]
 #[c]
 #[of]:function mouseEnable {
 function mouseEnable {
@@ -51,49 +57,108 @@ function mouseDisable {
 }
 #[cf]
 #[c]
+#[of]:function fn_refreshScreen {
 function fn_refreshScreen {
 #[c]  set -xv
-  if ${gl_add:-false} || ${gl_sub:-false} ; then
-    case "${gl_currentLine}" in
-      3|6|16|19) gl_step=1000 ;;
-      4|17) gl_step=.001 ;;
-      *) gl_step=1 ;;
+#[of]:  do line specific calculations
+  if ${gl_add:-false} || ${gl_sub:-false} || ${gl_zeroDecimal:-false} || ${gl_lineRecalc:-false} ; then
+#[of]:    set step for current line
+    case "${gl_fieldNames[${gl_currentLine}]}" in
+      inputPixelsPerFrame|inputVideoBitrate|inputAudioBitrate|\
+      outputPixelsPerFrame|outputVideoBitrate|outputAudioBitrate)
+        gl_step=$((1000*gl_stepMultiplyer))
+        ;;
+      inputBitsPerPixel|outputBitsPerPixel) gl_step=$(bc -l <<< ".001*${gl_stepMultiplyer}") ;;
+      *) gl_step=${gl_stepMultiplyer} ;;
     esac
+#[cf]
+#[of]:    do addition and subtraction
     ${gl_add:-false} && eval "gl_${gl_fieldNames[${gl_currentLine}]}=\$(bc -l <<< \"\${gl_${gl_fieldNames[${gl_currentLine}]}}+${gl_step}\")"
     ${gl_sub:-false} && {
       eval "gl_${gl_fieldNames[${gl_currentLine}]}=\$(bc -l <<< \"\${gl_${gl_fieldNames[${gl_currentLine}]}}-${gl_step}\")"
       eval "(( \$(bc -l <<< \"\${gl_${gl_fieldNames[${gl_currentLine}]}} < 0\") )) && gl_${gl_fieldNames[${gl_currentLine}]}=0"
     }
-    case "${gl_currentLine}" in
-      0|1)
-        gl_inputPixelsPerFrame=$((gl_inputWidth*gl_inputHeight))
+#[cf]
+#[of]:    zero decimal if desired
+    ${gl_zeroDecimal:-false} && case "${gl_fieldNames[${gl_currentLine}]}" in
+      inputBitsPerPixel|outputBitsPerPixel)
+        eval "gl_${gl_fieldNames[${gl_currentLine}]}=\$(printf '%.3f' \${gl_${gl_fieldNames[${gl_currentLine}]}} )"
+        ;;
+      *)
+        eval "gl_${gl_fieldNames[${gl_currentLine}]}=\"\${gl_${gl_fieldNames[${gl_currentLine}]}%.*}\""
+        ;;
+    esac
+#[cf]
+#[of]:    line specific calculations
+    case "${gl_fieldNames[${gl_currentLine}]}" in
+      inputWidth|inputHeight)
+        gl_inputPixelsPerFrame=$(bc -l <<< "${gl_inputWidth}*${gl_inputHeight}")
         gl_inputBitsPerPixel=$(bc -l <<< "(${gl_inputVideoBitrate})/(${gl_inputWidth}*${gl_inputHeight}*${gl_frameRate})")
         gl_aspect=$(bc -l <<< "${gl_inputWidth}/${gl_inputHeight}")
+        gl_recalc=true
         ;;
-      4)
+      inputPixelsPerFrame)
+        gl_inputWidth=$(bc -l <<< "sqrt(${gl_inputPixelsPerFrame}/(1/${gl_aspect}))")
+        gl_inputHeight=$(bc -l <<< "sqrt(${gl_inputPixelsPerFrame}/${gl_aspect})")
+        gl_recalc=true
+        ;;
+      inputBitsPerPixel)
         gl_inputVideoBitrate=$(bc -l <<< "${gl_inputPixelsPerFrame}*${gl_frameRate}*${gl_inputBitsPerPixel}")
         gl_recalc=true
         ;;
-      3|6|11|12|16|17|19)
+      outputWidth)
+        gl_outputHeight=$(bc -l <<< "${gl_outputWidth}/${gl_aspect}")
+        gl_outputPixelsPerFrame=$(bc -l <<< "${gl_outputWidth}*${gl_outputHeight}")
+        gl_outputBitsPerPixel=$(bc -l <<< "(${gl_outputVideoBitrate})/(${gl_outputPixelsPerFrame}*${gl_frameRate})")
+        ;;
+      outputHeight)
+        gl_outputWidth=$(bc -l <<< "${gl_outputHeight}/(1/${gl_aspect})")
+        gl_outputPixelsPerFrame=$(bc -l <<< "${gl_outputWidth}*${gl_outputHeight}")
+        gl_outputBitsPerPixel=$(bc -l <<< "(${gl_outputVideoBitrate})/(${gl_outputPixelsPerFrame}*${gl_frameRate})")
+        ;;
+      outputPixelsPerFrame)
+        gl_outputWidth=$(bc -l <<< "sqrt(${gl_outputPixelsPerFrame}/(1/${gl_aspect}))")
+        gl_outputHeight=$(bc -l <<< "sqrt(${gl_outputPixelsPerFrame}/${gl_aspect})")
+        gl_outputBitsPerPixel=$(bc -l <<< "(${gl_outputVideoBitrate})/(${gl_outputPixelsPerFrame}*${gl_frameRate})")
+        gl_recalc=true
+        ;;
+      outputVideoBitrate)
+        (( $(bc -l <<< "${gl_outputVideoBitrate} > ${gl_inputVideoBitrate}") )) && gl_outputVideoBitrate="${gl_inputVideoBitrate}"
+        gl_recalc=true
+        ;;
+      outputAudioBitrate)
+        (( $(bc -l <<< "${gl_outputAudioBitrate} > ${gl_inputAudioBitrate}") )) && gl_outputAudioBitrate="${gl_inputAudioBitrate}"
+        gl_recalc=true
+        ;;
+      outputFileSize)
+        gl_outputVideoStreamSize=$(bc -l <<< "${gl_outputFileSize}*1024*1024/(1+${gl_outputOverhead}/100)-${gl_outputAudioStreamSize}")
+        gl_outputVideoBitrate=$(bc -l <<< "${gl_outputVideoStreamSize}*8/${gl_length}")
+        gl_outputBitsPerPixel=$(bc -l <<< "(${gl_outputVideoBitrate})/(${gl_outputWidth}*${gl_outputHeight}*${gl_frameRate})")
+        ;;
+      inputVideoBitrate|inputAudioBitrate|length|inputOverhead|outputBitsPerPixel|outputOverhead)
         gl_recalc=true
         ;;
     esac
+#[cf]
     gl_add=false
     gl_sub=false
+    gl_zeroDecimal=false
+    gl_lineRecalc=false
   fi
+#[cf]
+#[of]:  do main recalc
   if ${gl_recalc:-false} || ${gl_add:-false} || ${gl_sub:-false} ; then
-    gl_inputPixelsPerFrame=$((gl_inputWidth*gl_inputHeight))
-    gl_inputBitsPerPixel=$(bc -l <<< "(${gl_inputVideoBitrate})/(${gl_inputWidth}*${gl_inputHeight}*${gl_frameRate})")
+    gl_inputPixelsPerFrame=$(bc -l <<< "${gl_inputWidth}*${gl_inputHeight}")
+    gl_inputBitsPerPixel=$(bc -l <<< "(${gl_inputVideoBitrate})/(${gl_inputPixelsPerFrame}*${gl_frameRate})")
     gl_aspect=$(bc -l <<< "${gl_inputWidth}/${gl_inputHeight}")
-    gl_inputPixelsPerFrame=$((gl_inputWidth*gl_inputHeight))
     gl_inputVideoStreamSize=$(bc -l <<< "(${gl_inputVideoBitrate}*${gl_length})/8")
     gl_inputAudioStreamSize=$(bc -l <<< "(${gl_inputAudioBitrate}*${gl_length})/8")
-    gl_inputFileSize=$(bc -l <<< "((${gl_inputVideoStreamSize}+${gl_inputAudioStreamSize})*(1+${gl_overhead}/100))/1024/1024")
+    gl_inputFileSize=$(bc -l <<< "((${gl_inputVideoStreamSize}+${gl_inputAudioStreamSize})*(1+${gl_inputOverhead}/100))/1024/1024")
 
 
     ((gl_hours=${gl_length%.*}/60/60))
-    ((gl_minutes=(${gl_length%.*}-gl_hours*60*60)/60 ))
-    gl_seconds=$(bc -l <<< "${gl_length}-${gl_hours}*60*60-${gl_minutes}*60")
+    gl_minutes=$(printf '%02d' $(( (${gl_length%.*}-gl_hours*60*60)/60 )) )
+    gl_seconds=$(printf '%09.6f' $(bc -l <<< "${gl_length}-${gl_hours}*60*60-${gl_minutes}*60"))
 
 
     gl_outputPixelsPerFrame=$(bc -l <<< "${gl_outputVideoBitrate}/${gl_outputBitsPerPixel}/${gl_frameRate}")
@@ -102,17 +167,18 @@ function fn_refreshScreen {
     
     gl_outputVideoStreamSize=$(bc -l <<< "(${gl_outputVideoBitrate}*${gl_length})/8")
     gl_outputAudioStreamSize=$(bc -l <<< "(${gl_outputAudioBitrate}*${gl_length})/8")
-    gl_outputFileSize=$(bc -l <<< "((${gl_outputVideoStreamSize}+${gl_outputAudioStreamSize})*(1+${gl_overhead}/100))/1024/1024")
+    gl_outputFileSize=$(bc -l <<< "((${gl_outputVideoStreamSize}+${gl_outputAudioStreamSize})*(1+${gl_outputOverhead}/100))/1024/1024")
     gl_recalc=false
   fi
-
+#[cf]
+#[of]:  clear and refresh screen
   clear
   echo
   for ((i=0;i<${#gl_fieldNames[@]};i++)) ; do
     ((i==gl_currentLine)) && echo -en "\\033[7m"
     printf '%02d  ' ${i}
-    case "${i}" in
-      11)
+    case "${gl_fieldNames[${i}]}" in
+      length)
         eval "echo ${q}gl_${gl_fieldNames[${i}]} ${d}{gl_padding:0:${d}(( 25-${d}{#gl_fieldNames[${d}{i}]}-3+1 ))} ${d}{gl_${gl_fieldNames[${i}]}} --- ${gl_hours}:${gl_minutes}:${gl_seconds}${q}"
         ;;
       *)
@@ -121,8 +187,9 @@ function fn_refreshScreen {
     esac
     ((i==gl_currentLine)) && echo -en "\\033[0m"
   done
-#[c]  set +xv
+#[cf]
 }
+#[cf]
 #[c]
 #[of]:function fn_getStreamValue {
 function fn_getStreamValue {
@@ -138,30 +205,44 @@ function fn_getFileinfo {
   _streamVideo=$(echo "${gl_fileinfo}" | grep '^streams.*type="video"' | grep -m 1 -oP '\.\K[[:digit:]]+(?=\.)')
   _streamAudio=$(echo "${gl_fileinfo}" | grep '^streams.*type="audio"' | grep -m 1 -oP '\.\K[[:digit:]]+(?=\.)')
 
-  gl_inputWidth="$(fn_getStreamValue ${_streamVideo} width)"
-  gl_inputHeight="$(fn_getStreamValue ${_streamVideo} height)"
-  gl_inputVideoBitrate="$(fn_getStreamValue ${_streamVideo} bit_rate)"
-  isnum "${gl_inputVideoBitrate}" || gl_inputVideoBitrate="$(fn_getStreamValue ${_streamVideo} tags.BPS)"
-  isnum "${gl_inputVideoBitrate}" || gl_inputVideoBitrate="$(fn_getStreamValue ${_streamVideo} tags.BPS_eng)"
-  gl_inputVideoBitrate="${gl_inputVideoBitrate:-0}"
   gl_frameRate="$(bc -l <<< "$(fn_getStreamValue ${_streamVideo} avg_frame_rate)")"
-  gl_inputVideoStreamSize="$(fn_getStreamValue ${_streamVideo} tags.NUMBER_OF_BYTES_eng)"
-
-  gl_inputAudioBitrate="$(fn_getStreamValue ${_streamAudio} bit_rate)"
-  isnum "${gl_inputAudioBitrate}" || gl_inputAudioBitrate="$(fn_getStreamValue ${_streamAudio} tags.BPS)"
-  isnum "${gl_inputAudioBitrate}" || gl_inputAudioBitrate="$(fn_getStreamValue ${_streamAudio} tags.BPS_eng)"
-  gl_inputAudioBitrate="${gl_inputAudioBitrate:-0}"
-  gl_inputAudioStreamSize="$(fn_getStreamValue ${_streamAudio} tags.NUMBER_OF_BYTES_eng)"
-
   gl_length=$(echo "${gl_fileinfo}" | grep -oP "^format\.duration=\K.*")
   gl_length="${gl_length//\"/}"
+  gl_inputWidth="$(fn_getStreamValue ${_streamVideo} width)"
+  gl_inputHeight="$(fn_getStreamValue ${_streamVideo} height)"
+
   gl_inputFileSize=$(echo "${gl_fileinfo}" | grep -oP "^format\.size=\K.*")
   gl_inputFileSize="${gl_inputFileSize//\"/}"
-  
-#[c]  echo "${gl_fileinfo}" | sort
-#[c]  unset gl_fieldNames gl_fileinfo
-#[c]  set | grep ^gl_
+
+
+  gl_inputVideoStreamSize="$(fn_getStreamValue ${_streamVideo} tags.NUMBER_OF_BYTES_eng)"
+  isnum "${gl_inputVideoStreamSize}" || gl_inputVideoStreamSize=$(( $(ffmpeg -i "$1" -c copy -map 0:v -map 0:a -map 0:s? -map 0:t? -f null - 2>&1 | grep ^video | grep -oP '^video:\K[[:digit:]]+')*1024 ))
+
+#[c]  gl_inputVideoBitrate="$(fn_getStreamValue ${_streamVideo} bit_rate)"
+#[c]  isnum "${gl_inputVideoBitrate}" || gl_inputVideoBitrate="$(fn_getStreamValue ${_streamVideo} tags.BPS)"
+#[c]  isnum "${gl_inputVideoBitrate}" || gl_inputVideoBitrate="$(fn_getStreamValue ${_streamVideo} tags.BPS_eng)"
+#[c]  isnum "${gl_inputVideoBitrate}" || 
+  gl_inputVideoBitrate=$(bc -l <<< "${gl_inputVideoStreamSize}*8/${gl_length}")
+  gl_inputVideoBitrate="${gl_inputVideoBitrate:-0}"
+
+
+  gl_inputAudioStreamSize="$(fn_getStreamValue ${_streamAudio} tags.NUMBER_OF_BYTES_eng)"
+  isnum "${gl_inputAudioStreamSize}" || gl_inputAudioStreamSize=$(( $(ffmpeg -i "$1" -c copy -map 0:v -map 0:a -map 0:s? -map 0:t? -f null - 2>&1 | grep ^video | grep -oP ' audio:\K[[:digit:]]+')*1024 ))
+
+#[c]  gl_inputAudioBitrate="$(fn_getStreamValue ${_streamAudio} bit_rate)"
+#[c]  isnum "${gl_inputAudioBitrate}" || gl_inputAudioBitrate="$(fn_getStreamValue ${_streamAudio} tags.BPS)"
+#[c]  isnum "${gl_inputAudioBitrate}" || gl_inputAudioBitrate="$(fn_getStreamValue ${_streamAudio} tags.BPS_eng)"
+#[c]  isnum "${gl_inputAudioBitrate}" || 
+  gl_inputAudioBitrate=$(bc -l <<< "${gl_inputAudioStreamSize}*8/${gl_length}")
+  gl_inputAudioBitrate="${gl_inputAudioBitrate:-0}"
+
+  gl_inputOverhead=$(( gl_inputFileSize/(gl_inputVideoStreamSize+gl_inputAudioStreamSize)-1 ))
+
 #[c]  exit
+
+  (( $(bc -l <<< "${gl_outputVideoBitrate:-0} > ${gl_inputVideoBitrate}") )) && gl_outputVideoBitrate="${gl_inputVideoBitrate}"
+  (( $(bc -l <<< "${gl_outputAudioBitrate:-0} > ${gl_inputAudioBitrate}") )) && gl_outputAudioBitrate="${gl_inputAudioBitrate}"
+
 
 #[c]streams.stream.0.width=1920
 #[c]streams.stream.0.height=1080
@@ -185,11 +266,11 @@ gl_fieldNames=(
   inputVideoBitrate inputBitsPerPixel inputVideoStreamSize
   inputAudioBitrate inputAudioStreamSize
   inputFileSize
-  aspect frameRate length overhead
+  aspect frameRate length inputOverhead
   outputWidth outputHeight outputPixelsPerFrame
   outputVideoBitrate outputBitsPerPixel outputVideoStreamSize
   outputAudioBitrate outputAudioStreamSize
-  outputFileSize
+  outputFileSize outputOverhead
 )
 gl_padding=$(printf -- '-%.0s' {1..30})
 for ((i=0;i<${#gl_fieldNames[@]};i++)) ; do
@@ -197,20 +278,20 @@ for ((i=0;i<${#gl_fieldNames[@]};i++)) ; do
   eval "gl_${gl_fieldNames[${i}]}=0"
 done
 
-gl_inputWidth=640
-gl_inputHeight=272
-gl_inputVideoBitrate=$((950-128))
 
+gl_inputOverhead=0
+gl_outputOverhead=0
 gl_inputWidth=1920
 gl_inputHeight=1080
-gl_inputVideoBitrate=4800000
+gl_inputVideoBitrate=$((3000*1000))
+gl_inputAudioBitrate=$((512*1000))
+gl_length=5500
 
-gl_inputAudioBitrate=128000
 gl_frameRate=23.98
-gl_overhead=3
+
+gl_outputBitsPerPixel=.04
 gl_outputVideoBitrate=$((300*1000))
 gl_outputAudioBitrate=$((128*1000))
-gl_outputBitsPerPixel=.05
 
 [[ -n "$1" ]] && fn_getFileinfo "$1"
 
@@ -219,15 +300,23 @@ gl_currentLine=0
 gl_recalc=true
 gl_add=false
 gl_sub=false
+gl_zeroDecimal=false
+gl_editingField=false
+gl_lineRecalc=false
+
+#[of]:key process loop
 while {
     fn_refreshScreen
-
     read -s -N 1 -r _key
   } ; do
-#[of]:  case "${_key}" in
     case "${_key}" in
 #[of]:      escaped keys
-      $'\E')
+      $'\e')
+        if ${gl_editingField:-false} ; then
+          gl_editingField=false
+          gl_lineRecalc=true
+          fn_refreshScreen
+        fi
         read -s -N 2 -r -t .1 _key || {
 #[of]:          esc
 #[c]        esc itself is just a single char
@@ -242,59 +331,82 @@ while {
         case "${_key}" in
 #[of]:          mouse
             '[<')
-              _mouse=""
-              _mouseEvent=( _ _ _ _ _ )
-              while read -s -n 1 -r _key ; do
-                _mouse="${_mouse}${_key}"
-                [[ "${_key}" =~ (M|m) ]] && break
+#[of]:              read mouse input strings from terminal
+              _mouseButtonId=""
+              while read -s -N 1 -r _key ; do
+                [[ "${_key}" == ";" ]] && break
+                _mouseButtonId="${_mouseButtonId}${_key}"
               done
-              [[ -z "${_mouse%%*M}" ]] && _mouseEvent[4]="down"
-              [[ -z "${_mouse%%*m}" ]] && _mouseEvent[4]="up"
-              _mouse="${_mouse:0:-1}"
-              _mouseEvent=( ${_mouse//;/ } _ ${_mouseEvent[4]} )
+              _mouseX=""
+              while read -s -N 1 -r _key ; do
+                [[ "${_key}" == ";" ]] && break
+                _mouseX="${_mouseX}${_key}"
+              done
+              _mouseY=""
+              while read -s -N 1 -r _key ; do
+                [ -z "${_key#[Mm]}" ] && break
+                _mouseY="${_mouseY}${_key}"
+              done
+              [[ "${_key}" == "M" ]] && _mouseButtonState="Down" || _mouseButtonState="Up"
+              ((_mouseX--))
+              ((_mouseY--))
+#[cf]
+#[of]:              decode mouse input into event tags
 
-              ##eat mouse button up
-              [[ ! "${_mouseEvent[0]}" =~ (64|65) ]] && {
-                read -s -N 1 -r _key
-                while read -s -n 1 -r _key ; do
-                  _mouse="${_mouse}${_key}"
-                  [[ "${_key}" =~ (M|m) ]] && break
-                done
-                _mouseEvent[4]="up"
-              }
+#[c]              left middle right scroll_Up scroll_Down
+#[c]              shift alt ctrl
 
-#[c]              [[ "${_mouseEvent[0]}" == 0 ]] && _mouseEvent[3]="button_left"
-#[c]              [[ "${_mouseEvent[0]}" == 1 ]] && _mouseEvent[3]="button_middle"
-#[c]              [[ "${_mouseEvent[0]}" == 2 ]] && _mouseEvent[3]="button_right"
+              (( (_mouseButtonId & 4 )==4  )) && _shift="Shift" || _shift=""
+              (( (_mouseButtonId & 8 )==8  )) && _alt="Alt"     || _alt=""
+              (( (_mouseButtonId & 16)==16 )) && _ctrl="Ctrl"   || _ctrl=""
+              (( (_mouseButtonId & 32)==32 )) && _mouseButtonState="Drag"
+              case "$((_mouseButtonId & 67))" in
+                 0) _mouseButtonName="Left"   ;;&
+                 1) _mouseButtonName="Middle" ;;&
+                 2) _mouseButtonName="Right"  ;;&
+                64) _mouseButtonName="Scroll"
+                    _mouseButtonState="Up"    ;;
+                65) _mouseButtonName="Scroll"
+                    _mouseButtonState="Down"  ;;
+              esac
+#[cf]
 
 #[of]:              left button click
-              if [[ "${_mouseEvent[0]}" == 0 && "${_mouseEvent[4]}" == "up" ]] ; then
-                :
+              if [[ "${_mouseButtonName}" == "Left" && "${_mouseButtonState}" == "Up" ]] ; then
+                ((0 < _mouseY && _mouseY <= ${#gl_fieldNames[@]})) && gl_currentLine=$((_mouseY-1))
               fi
 #[cf]
 #[of]:              middle button click
-              if [[ "${_mouseEvent[0]}" == 1 && "${_mouseEvent[4]}" == "up" ]] ; then
+              if [[ "${_mouseButtonName}" == "Middle" && "${_mouseButtonState}" == "Up" ]] ; then
                 :
               fi
 #[cf]
 #[of]:              right button click
-              if [[ "${_mouseEvent[0]}" == 2 && "${_mouseEvent[4]}" == "up" ]] ; then
+              if [[ "${_mouseButtonName}" == "Right" && "${_mouseButtonState}" == "Up" ]] ; then
                 clear
                 break
               fi
 #[cf]
-
 #[of]:              scroll up
-              if [[ "${_mouseEvent[0]}" == 64 ]] ; then
-                ((gl_currentLine>0)) && ((gl_currentLine--))
+              if [[ "${_mouseButtonName}" == "Scroll" && "${_mouseButtonState}" == "Up" ]] ; then
+                ((0 < _mouseY && _mouseY <= ${#gl_fieldNames[@]})) && {
+                  gl_currentLine=$((_mouseY-1))
+                  gl_stepMultiplyer=1
+                  [[ "${_shift}" == "Shift" ]] && gl_stepMultiplyer=10
+                  gl_add=true
+                }
               fi
 #[cf]
 #[of]:              scroll down
-              if [[ "${_mouseEvent[0]}" == 65 ]] ; then
-                ((gl_currentLine<${#gl_fieldNames[@]}-1)) && ((gl_currentLine++))
+              if [[ "${_mouseButtonName}" == "Scroll" && "${_mouseButtonState}" == "Down" ]] ; then
+                ((0 < _mouseY && _mouseY <= ${#gl_fieldNames[@]})) && {
+                  gl_currentLine=$((_mouseY-1))
+                  gl_stepMultiplyer=1
+                  [[ "${_shift}" == "Shift" ]] && gl_stepMultiplyer=10
+                  gl_sub=true
+                }
               fi
 #[cf]
-#[c]              echo "${_mouseEvent[@]}---mouse"
               ;;
 #[cf]
 #[of]:          shift up)
@@ -309,12 +421,14 @@ while {
 #[cf]
 #[of]:          shift left)
             '[d'|';2D')
-              echo shift left
+              gl_stepMultiplyer=10
+              gl_sub=true
               ;;
 #[cf]
 #[of]:          shift right)
             '[c'|';2C')
-              echo shift right
+              gl_stepMultiplyer=10
+              gl_add=true
               ;;
 #[cf]
 #[of]:          up)
@@ -329,15 +443,43 @@ while {
 #[cf]
 #[of]:          left)
             '[D')
+              gl_stepMultiplyer=1
               gl_sub=true
               ;;
 #[cf]
 #[of]:          right)
             '[C')
+              gl_stepMultiplyer=1
               gl_add=true
               ;;
 #[cf]
         esac
+        ;;
+#[cf]
+#[of]:      enter
+      '
+')
+        if ${gl_editingField:-false} ; then
+          gl_editingField=false
+          gl_lineRecalc=true
+          fn_refreshScreen
+        fi
+        ;;
+#[cf]
+#[of]:      [.0-9])
+      [.0-9])
+        if ! ${gl_editingField:-false} ; then
+          eval "gl_${gl_fieldNames[${gl_currentLine}]}=\"\""
+          gl_editingField=true
+        fi
+        eval "gl_${gl_fieldNames[${gl_currentLine}]}=\"\${gl_${gl_fieldNames[${gl_currentLine}]}}\${_key}\""
+        ;;
+#[cf]
+#[of]:      z)
+      z)
+        gl_editingField=false
+        gl_stepMultiplyer=1
+        gl_zeroDecimal=true
         ;;
 #[cf]
 #[of]:      q)
@@ -346,8 +488,19 @@ while {
         break
         ;;
 #[cf]
-    esac
+#[of]:      *)
+      *)
+#[of]:        backspace
+        [[ -n "${_key##*[^[:cntrl:]]*}" ]] && \
+          [[ $(printf %d $(printf %s "${_key}" | od -An -t dC)) = 127 ]] && \
+            ${gl_editingField:-false} && \
+              eval "gl_${gl_fieldNames[${gl_currentLine}]}=\"\${gl_${gl_fieldNames[${gl_currentLine}]}::-1}\""
 #[cf]
+        ;;
+#[cf]
+    esac
 done
+#[cf]
 mouseDisable
 #[cf]
+# vim:number:tabstop=2:shiftwidth=2:autoindent:foldmethod=marker:foldlevel=0:foldmarker=#[of]\:,#[cf]
